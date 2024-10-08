@@ -5,10 +5,10 @@ public class SessionAction {
 
     private final long id;
     private final long userId;
-    private final long actionType;
+    private final String actionType;
     private final double amount;
 
-    public SessionAction(long id, long userId, long actionType, double amount) {
+    public SessionAction(long id, long userId, String actionType, double amount) {
         this.id = id;
         this.userId = userId;
         this.actionType = actionType;
@@ -23,7 +23,7 @@ public class SessionAction {
         return userId;
     }
 
-    public long getActionType() {
+    public String getActionType() {
         return actionType;
     }
 
