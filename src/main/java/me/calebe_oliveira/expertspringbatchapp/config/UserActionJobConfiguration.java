@@ -52,8 +52,8 @@ public class UserActionJobConfiguration {
     @Bean
     @Qualifier("simpleActionCalculationJob")
     public AbstractJob simpleActionCalculationJob(JobRepository jobRepository,
-                                                  @Qualifier("simpleActionCalculationStep")Step simpleActionCalculationStep) {
-        return (AbstractJob)  new JobBuilder("simpleActionCalculationJob", jobRepository)
+                                                  @Qualifier("simpleActionCalculationStep") Step simpleActionCalculationStep) {
+        return (AbstractJob) new JobBuilder("simpleActionCalculationJob", jobRepository)
                 .start(simpleActionCalculationStep)
                 .build();
     }
@@ -69,8 +69,8 @@ public class UserActionJobConfiguration {
 
     @Bean
     @Qualifier("partitionedLocalActionCalculationJob")
-    public Job paritionedLocalActionCalculationJob(JobRepository jobRepository,
-                                                   @Qualifier("partitionedLocalActionCalculationStep") Step partitionedLocalActionCalculationStep) {
+    public Job partitionedLocalActionCalculationJob(JobRepository jobRepository,
+                                                    @Qualifier("partitionedLocalActionCalculationStep") Step partitionedLocalActionCalculationStep) {
         return new JobBuilder("partitionedLocalActionCalculationJob", jobRepository)
                 .start(partitionedLocalActionCalculationStep)
                 .build();
@@ -105,7 +105,7 @@ public class UserActionJobConfiguration {
                 .partitioner("simpleActionCalculationStep", new SessionActionPartitioner())
                 .step(simpleActionCalculationStep)
                 .taskExecutor(new SimpleAsyncTaskExecutor())
-                .gridSize(3)
+                .gridSize(3) // Hard-code 3 threads to partition data handling
                 .build();
     }
 
@@ -116,11 +116,19 @@ public class UserActionJobConfiguration {
                                                    @Qualifier("sourceDataSource") DataSource sourceDataSource,
                                                    @Qualifier("multiThreadStepExecutor") TaskExecutor multiThreadStepExecutor) {
         return new StepBuilder("multiThreadedActionCalculationStep", jobRepository)
+                // Write in batches of size 5
                 .<SessionAction, UserScoreUpdate>chunk(5, transactionManager)
+                // Read in pages of size 5 using synchronized reader
+                // to mitigate thread safety problems while using shared reader between threads
                 .reader(new SynchronizedItemStreamReaderBuilder<SessionAction>()
                         .delegate(sessionActionReader)
                         .build())
+                // Convert items into user score update objects used to update with (score = score * a + b) idea
                 .processor(getSessionActionProcessor())
+                // Write into the database using the upsert capabilities; ideally, we should also wrap the writer
+                // into synchronized writer to avoid deadlock issues with Postgres. However, we are not doing it,
+                // since this step is provided for demonstration purposes anyway and will produce wrong results
+                // because of strict order guarantee requirements because of the problem definition
                 .writer(new JdbcBatchItemWriterBuilder<UserScoreUpdate>()
                         .dataSource(sourceDataSource)
                         .itemPreparedStatementSetter(SourceDataBaseUtils.UPDATE_USER_SCORE_PARAMETER_SETTER)
@@ -134,9 +142,9 @@ public class UserActionJobConfiguration {
     @Bean
     @Qualifier("multiThreadStepExecutor")
     public TaskExecutor multiThreadStepExecutor() {
-        ThreadPoolTaskExecutor threadPoolTaskExecutor = new ThreadPoolTaskExecutor();
-        threadPoolTaskExecutor.setCorePoolSize(3);
-        return threadPoolTaskExecutor;
+        ThreadPoolTaskExecutor threadPoolExecutor = new ThreadPoolTaskExecutor();
+        threadPoolExecutor.setCorePoolSize(3);
+        return threadPoolExecutor;
     }
 
     @Bean
@@ -145,9 +153,13 @@ public class UserActionJobConfiguration {
                                             @Qualifier("sessionActionReader") ItemReader<SessionAction> sessionActionReader,
                                             @Qualifier("sourceDataSource") DataSource sourceDataSource) {
         return new StepBuilder("simpleActionCalculationStep", jobRepository)
+                // Write in batches of size 5
                 .<SessionAction, UserScoreUpdate>chunk(5, transactionManager)
+                // Read also in pages of size 5 (configured in reader's bean definition)
                 .reader(sessionActionReader)
+                // Convert items into user score update objects used to update with (score = score * a + b) idea
                 .processor(getSessionActionProcessor())
+                // Write into the database using the upsert capabilities
                 .writer(new JdbcBatchItemWriterBuilder<UserScoreUpdate>()
                         .dataSource(sourceDataSource)
                         .itemPreparedStatementSetter(SourceDataBaseUtils.UPDATE_USER_SCORE_PARAMETER_SETTER)
@@ -157,11 +169,12 @@ public class UserActionJobConfiguration {
                 .build();
     }
 
+    // Processor to process single session action item
     private static ItemProcessor<SessionAction, UserScoreUpdate> getSessionActionProcessor() {
         return sessionAction -> {
-            if(SourceDataBaseUtils.PLUS_TYPE.equals(sessionAction.getActionType())) {
+            if (SourceDataBaseUtils.PLUS_TYPE.equals(sessionAction.getActionType())) {
                 return new UserScoreUpdate(sessionAction.getUserId(), sessionAction.getAmount(), 1d);
-            } else if(SourceDataBaseUtils.MULTI_TYPE.equals(sessionAction.getActionType())) {
+            } else if (SourceDataBaseUtils.MULTI_TYPE.equals(sessionAction.getActionType())) {
                 return new UserScoreUpdate(sessionAction.getUserId(), 0d, sessionAction.getAmount());
             } else {
                 throw new RuntimeException("Unknown session action record type: " + sessionAction.getActionType());
@@ -169,38 +182,41 @@ public class UserActionJobConfiguration {
         };
     }
 
+    // Step execution listener that logs information about step and environment (thread) right before the start of the execution
     private static StepExecutionListener beforeStepLoggerListener() {
         return new StepExecutionListener() {
             @Override
             public void beforeStep(StepExecution stepExecution) {
                 int partitionCount = stepExecution.getExecutionContext().getInt(SessionActionPartitioner.PARTITION_COUNT, -1);
                 int partitionIndex = stepExecution.getExecutionContext().getInt(SessionActionPartitioner.PARTITION_INDEX, -1);
-                if(partitionIndex == -1 || partitionCount == -1) {
+                if (partitionIndex == -1 || partitionCount == -1) {
                     LOGGER.info("Calculation step is about to start handling all session action records");
                 } else {
                     String threadName = Thread.currentThread().getName();
-                    LOGGER.info("Calculation step is about to start handling partition " + partitionIndex +
-                            " out of total " + partitionCount + " partitions in the thread -> " + threadName);
+                    LOGGER.info("Calculation step is about to start handling partition " + partitionIndex
+                            + " out of total " + partitionCount + " partitions in the thread -> " + threadName);
                 }
             }
         };
     }
 
     @Bean
-    @StepScope
+    @StepScope // Reader is step scope to auto-wire partition properties from the step execution context
     @Qualifier("sessionActionReader")
     public ItemStreamReader<SessionAction> sessionActionReader(@Qualifier("sourceDataSource") DataSource sourceDataSource,
                                                                @Value("#{stepExecutionContext['partitionCount']}") Integer partitionCount,
                                                                @Value("#{stepExecutionContext['partitionIndex']}") Integer partitionIndex) {
+        // Select all in case no partition properties passed; select partition-specific records otherwise
         PagingQueryProvider queryProvider = (partitionCount == null || partitionIndex == null)
                 ? SourceDataBaseUtils.selectAllSessionActionsProvider(SessionAction.SESSION_ACTION_TABLE_NAME)
                 : SourceDataBaseUtils
-                     .selectPartitionOfSessionActionsProvider(SessionAction.SESSION_ACTION_TABLE_NAME, partitionCount, partitionIndex);
+                .selectPartitionOfSessionActionsProvider(SessionAction.SESSION_ACTION_TABLE_NAME, partitionCount, partitionIndex);
         return new JdbcPagingItemReaderBuilder<SessionAction>()
                 .name("sessionActionReader")
                 .dataSource(sourceDataSource)
                 .queryProvider(queryProvider)
                 .rowMapper(SourceDataBaseUtils.getSessionActionMapper())
+                // Querying the database in pages of 5
                 .pageSize(5)
                 .build();
     }
@@ -210,6 +226,13 @@ public class UserActionJobConfiguration {
         return new PartitioningConfig(workerServerBaseUrls);
     }
 
+
+    /* ******************************** Spring Batch Utilities are defined below ********************************** */
+
+    /**
+     * Since we would like to launch jobs asynchronously, we would like to create async job launcher,
+     * since out-of-the-box Spring Batch job launcher is synchronous
+     */
     @Bean
     @Qualifier("asyncJobLauncher")
     public JobLauncher asyncJobLauncher(JobRepository jobRepository) {
@@ -219,6 +242,11 @@ public class UserActionJobConfiguration {
         return jobLauncher;
     }
 
+    /**
+     * Due to the fact we are not using standard Spring-expected naming and directory structure,
+     * {@link org.springframework.batch.core.configuration.annotation.EnableBatchProcessing} is not able
+     * to auto-create data source bean, so it's defined explicitly here
+     */
     @Bean
     public DataSource dataSource(@Value("${db.url}") String url,
                                  @Value("${db.username}") String username,
@@ -232,6 +260,7 @@ public class UserActionJobConfiguration {
         return dataSource;
     }
 
+    // Transaction manager for source data source, to control boundaries of storing the data in Postgresql
     @Bean
     public PlatformTransactionManager transactionManager(@Qualifier("sourceDataSource") DataSource sourceDataSource) {
         JdbcTransactionManager transactionManager = new JdbcTransactionManager();
@@ -239,12 +268,27 @@ public class UserActionJobConfiguration {
         return transactionManager;
     }
 
+
+    /**
+     * Due to the fact we are not using standard Spring-expected naming and directory structure,
+     * {@link org.springframework.batch.core.configuration.annotation.EnableBatchProcessing} is not able
+     * do detect whether the database should be initialized on start. So, we explicitly override it with
+     * supplying {@link BatchProperties} bean defined below. In the configuration with correct naming and
+     * directory setup, 'spring.batch.initialize-schema' property should make things work magically
+     */
     @Bean
     public BatchDataSourceScriptDatabaseInitializer batchDataSourceInitializer(DataSource dataSource,
                                                                                BatchProperties properties) {
         return new BatchDataSourceScriptDatabaseInitializer(dataSource, properties.getJdbc());
     }
 
+    /**
+     * Due to the fact we are not using standard Spring-expected naming and directory structure,
+     * {@link org.springframework.batch.core.configuration.annotation.EnableBatchProcessing} is not able
+     * do detect whether the database should be initialized on start. So, we explicitly define the
+     * {@link BatchProperties} bean with auto-wiring the configured value. In the configuration with correct
+     * naming and directory setup, 'spring.batch.initialize-schema' property should make things work magically
+     */
     @Bean
     public BatchProperties batchProperties(@Value("${batch.db.initialize-schema}") DatabaseInitializationMode initializationMode) {
         BatchProperties properties = new BatchProperties();

@@ -33,35 +33,34 @@ public class HttpRequestPartitionHandler extends AbstractPartitionHandler {
     private static final String START_WORKER_ENDPOINT = "start-worker";
     private static final long NANO_IN_MILLI = 1000000;
 
-    public HttpRequestPartitionHandler(Step workerStep, PartitioningConfig partitioningConfig, long endToEndTimeoutMillis, JobRepository jobRepository, JobExplorer jobExplorer) {
+    public HttpRequestPartitionHandler(Step workerStep, PartitioningConfig partitioningConfig, long endToEndTimeoutMillis,
+                                       JobRepository jobRepository, JobExplorer jobExplorer) {
         this.workerStep = workerStep;
         this.partitioningConfig = partitioningConfig;
         this.endToEndTimeoutMillis = endToEndTimeoutMillis;
         this.jobRepository = jobRepository;
         this.jobExplorer = jobExplorer;
+        this.gridSize = partitioningConfig.getWorkerBaseUrls().length;
     }
 
-    @Override
     protected Set<StepExecution> doHandle(StepExecution managerStepExecution, Set<StepExecution> partitionStepExecutions) throws Exception {
-        if(partitioningConfig.getWorkerBaseUrls().length != partitionStepExecutions.size()) {
-            throw new IllegalArgumentException("Misconfiguration: grid size " + partitionStepExecutions.size() + " should be equal to the number of workers " + partitioningConfig.getWorkerBaseUrls().length + " provided through partitioning config.");
+        if (partitioningConfig.getWorkerBaseUrls().length != partitionStepExecutions.size()) {
+            throw new IllegalArgumentException("Misconfiguration: grid size " + partitionStepExecutions.size() +  " should be equal to the number of workers " + partitioningConfig.getWorkerBaseUrls().length + "  provided through partitioning config");
         }
 
         Iterator<StepExecution> stepExecutionIterator = partitionStepExecutions.iterator();
-
-        for(String workerBaseUrl : partitioningConfig.getWorkerBaseUrls()) {
+        for (String workerBaseUrl : partitioningConfig.getWorkerBaseUrls()) {
             sendStartWorkerRequest(workerBaseUrl, stepExecutionIterator.next());
         }
 
         long startTime = System.nanoTime();
         while ((System.nanoTime() - startTime) / NANO_IN_MILLI < endToEndTimeoutMillis) {
-            if(checkPartitionStepExecutionCompleted(managerStepExecution, partitionStepExecutions)) {
+            if (checkPartitionStepExecutionCompleted(managerStepExecution, partitionStepExecutions)) {
                 return partitionStepExecutions;
             } else {
                 Thread.sleep(1000);
             }
         }
-
         throw new RuntimeException("HTTP request partition handler timed out");
     }
 
@@ -71,10 +70,8 @@ public class HttpRequestPartitionHandler extends AbstractPartitionHandler {
                 .addParameter("stepExecutionId", Long.toString(partitionStepExecution.getId()))
                 .addParameter("stepName", workerStep.getName())
                 .build();
-
         CloseableHttpResponse response = HTTP_CLIENT.execute(new HttpPost(uri));
-
-        if(response.getStatusLine().getStatusCode() != 200) {
+        if (response.getStatusLine().getStatusCode() != 200) {
             ExitStatus exitStatus = ExitStatus.FAILED
                     .addExitDescription("HTTP request to start worker did not finish successfully, so exiting");
             partitionStepExecution.setStatus(BatchStatus.FAILED);
@@ -86,22 +83,18 @@ public class HttpRequestPartitionHandler extends AbstractPartitionHandler {
     private boolean checkPartitionStepExecutionCompleted(StepExecution managerStepExecution, Set<StepExecution> partitionStepExecutions) {
         JobExecution jobExecution = jobExplorer.getJobExecution(managerStepExecution.getJobExecutionId());
         Map<Long, BatchStatus> stepExecutionStatusMap = new HashMap<>(jobExecution.getStepExecutions().size());
-
-        for (StepExecution queriedStepExecution: jobExecution.getStepExecutions()) {
+        for (StepExecution queriedStepExecution : jobExecution.getStepExecutions()) {
             stepExecutionStatusMap.put(queriedStepExecution.getId(), queriedStepExecution.getStatus());
         }
 
         boolean jobComplete = true;
-
-        for(StepExecution partitionStepExecution: partitionStepExecutions) {
+        for (StepExecution partitionStepExecution : partitionStepExecutions) {
             BatchStatus partitionStepStatus = stepExecutionStatusMap.get(partitionStepExecution.getId());
-            partitionStepExecution.setStatus(partitionStepStatus);
-
-            if(!BatchStatus.COMPLETED.equals(partitionStepStatus) && !BatchStatus.FAILED.equals(partitionStepStatus)) {
+            partitionStepExecution.setStatus(partitionStepStatus); // Also, setting proper status such that it could be used upstream
+            if (!BatchStatus.COMPLETED.equals(partitionStepStatus) && !BatchStatus.FAILED.equals(partitionStepStatus)) {
                 jobComplete = false;
             }
         }
-
         return jobComplete;
     }
 }

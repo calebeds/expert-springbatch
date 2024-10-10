@@ -4,7 +4,7 @@ public class PartitioningConfig {
     private final String[] workerBaseUrls;
 
     public PartitioningConfig(String workerBaseUrlsProperty) {
-        this.workerBaseUrls = workerBaseUrlsProperty.split(",");
+        workerBaseUrls = workerBaseUrlsProperty.split(",");
     }
 
     public String[] getWorkerBaseUrls() {

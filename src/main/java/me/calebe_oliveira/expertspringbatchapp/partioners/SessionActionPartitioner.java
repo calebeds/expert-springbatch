@@ -15,14 +15,12 @@ public class SessionActionPartitioner implements Partitioner {
     @Override
     public Map<String, ExecutionContext> partition(int gridSize) {
         Map<String, ExecutionContext> partitionMap = new HashMap<>(gridSize);
-
         for (int i = 0; i < gridSize; i++) {
             ExecutionContext executionContext = new ExecutionContext();
             executionContext.putInt(PARTITION_COUNT, gridSize);
             executionContext.putInt(PARTITION_INDEX, i);
-            partitionMap.put(PARTITION_INDEX + i, executionContext);
+            partitionMap.put(PARTITION_NAME_PREFIX + i, executionContext);
         }
-
         return partitionMap;
     }
 }

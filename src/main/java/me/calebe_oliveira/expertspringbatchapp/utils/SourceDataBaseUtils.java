@@ -16,41 +16,46 @@ public class SourceDataBaseUtils {
     public static final String MULTI_TYPE = "multi";
 
     public static void dropTableIfExists(JdbcTemplate jdbcTemplate, String tableName) {
-        jdbcTemplate.update("DROP TABLE IF EXISTS " + tableName);
+        jdbcTemplate.update("drop table if exists " + tableName);
     }
 
+    // Creates a schema for session action table
     public static void createSessionActionTable(JdbcTemplate jdbcTemplate, String tableName) {
-        jdbcTemplate.update("CREATE TABLE " + tableName + " (" +
-                "id SERIAL PRIMARY KEY," +
-                "user_id INT NOT NULL," +
-                "action_type VARCHAR(36) NOT NULL," +
-                "amount NUMERIC(10,2) NOT NULL" +
+        jdbcTemplate.update("create table " + tableName + " (" +
+                "id serial primary key," +
+                "user_id int not null," +
+                // Either 'plus' or 'multi'
+                "action_type varchar(36) not null," +
+                "amount numeric(10,2) not null" +
                 ")");
     }
 
+    // Creates a schema for user score table
     public static void createUserScoreTable(JdbcTemplate jdbcTemplate, String tableName) {
-        jdbcTemplate.update("CREATE TABLE " + tableName + " (" +
-                "user_id INT NOT NULL UNIQUE," +
-                "score NUMERIC(10,2) NOT NULL" +
+        jdbcTemplate.update("create table " + tableName + " (" +
+                "user_id int not null unique," +
+                "score numeric(10,2) not null" +
                 ")");
     }
 
     public static String constructUpdateUserScoreQuery(String tableName) {
-        return "INSERT INTO " + tableName + " (user_id, score) VALUES (?, ?) " +
-                "ON CONFLICT (user_id) DO " +
-                "UPDATE SET SCORE = " + tableName + ".score * ? + ?";
+        return "insert into " + tableName + " (user_id, score) values (?, ?) " +
+                "on conflict (user_id) do " +
+                "update set score = " + tableName + ".score * ? + ?";
     }
 
-    public static ItemPreparedStatementSetter<UserScoreUpdate> UPDATE_USER_SCORE_PARAMETER_SETTER = ((item, ps) -> {
+    // Parameter setter for org.example.SourceDatabaseUtils.constructUpdateUserScoreQuery
+    public static ItemPreparedStatementSetter<UserScoreUpdate> UPDATE_USER_SCORE_PARAMETER_SETTER = (item, ps) -> {
         ps.setLong(1, item.getUserId());
         ps.setDouble(2, item.getAdd());
-        ps.setDouble(3,item.getMultiply());
+        ps.setDouble(3, item.getMultiply());
         ps.setDouble(4, item.getAdd());
-    });
+    };
 
+    // Insert session action record into the specified table
     public static void insertSessionAction(JdbcTemplate jdbcTemplate, SessionAction sessionAction, String tableName) {
         jdbcTemplate
-                .update("INSERT INTO " + tableName + " (id, user_id, action_type, amount) VALUES (?, ?, ?, ?)",
+                .update("insert into " + tableName + " (id, user_id, action_type, amount) values (?, ?, ?, ?)",
                         sessionAction.getId(), sessionAction.getUserId(), sessionAction.getActionType(), sessionAction.getAmount());
     }
 
@@ -70,8 +75,8 @@ public class SourceDataBaseUtils {
     }
 
     public static RowMapper<SessionAction> getSessionActionMapper() {
-        return ((rs, rowNum) ->
+        return (rs, rowNum) ->
                 new SessionAction(rs.getLong("id"), rs.getLong("user_id"),
-                        rs.getString("action_type"), rs.getDouble("amount")));
+                        rs.getString("action_type"), rs.getDouble("amount"));
     }
 }
