@@ -72,6 +72,21 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>exec-maven-plugin</artifactId>
+				<version>3.4.1</version>
+				<executions>
+					<execution>
+						<goals>
+							<goal>exec</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<mainClass>me.calebe_oliveira.expertspringbatchapp.utils.GenerateSourceDatabase</mainClass>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
 
